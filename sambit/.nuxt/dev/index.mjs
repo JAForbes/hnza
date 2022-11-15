@@ -8,6 +8,7 @@ import { provider, isWindows } from 'file:///home/y/hnza_stuff/hnza/node_modules
 import { createRenderer } from 'file:///home/y/hnza_stuff/hnza/node_modules/vue-bundle-renderer/dist/runtime.mjs';
 import { eventHandler, defineEventHandler, handleCacheHeaders, createEvent, createApp, createRouter, lazyEventHandler, getQuery } from 'file:///home/y/hnza_stuff/hnza/node_modules/h3/dist/index.mjs';
 import devalue from 'file:///home/y/hnza_stuff/hnza/node_modules/@nuxt/devalue/dist/devalue.mjs';
+import { renderToString } from 'file:///home/y/hnza_stuff/hnza/node_modules/vue/server-renderer/index.mjs';
 import { parseURL, withQuery, joinURL } from 'file:///home/y/hnza_stuff/hnza/node_modules/ufo/dist/index.mjs';
 import destr from 'file:///home/y/hnza_stuff/hnza/node_modules/destr/dist/index.mjs';
 import { snakeCase } from 'file:///home/y/hnza_stuff/hnza/node_modules/scule/dist/index.mjs';
@@ -451,6 +452,31 @@ function publicAssetsURL(...path) {
 }
 
 const getClientManifest = () => import('/home/y/hnza_stuff/hnza/.nuxt/dist/server/client.manifest.mjs').then((r) => r.default || r).then((r) => typeof r === "function" ? r() : r);
+const getServerEntry = () => import('/home/y/hnza_stuff/hnza/.nuxt/dist/server/server.mjs').then((r) => r.default || r);
+const getSSRRenderer = lazyCachedFunction(async () => {
+  const manifest = await getClientManifest();
+  if (!manifest) {
+    throw new Error("client.manifest is not available");
+  }
+  const createSSRApp = await getServerEntry();
+  if (!createSSRApp) {
+    throw new Error("Server bundle is not available");
+  }
+  const options = {
+    manifest,
+    renderToString: renderToString$1,
+    buildAssetsURL
+  };
+  const renderer = createRenderer(createSSRApp, options);
+  async function renderToString$1(input, context) {
+    const html = await renderToString(input, context);
+    if (process.env.NUXT_VITE_NODE_OPTIONS) {
+      renderer.rendererContext.updateManifest(await getClientManifest());
+    }
+    return `<div id="__nuxt">${html}</div>`;
+  }
+  return renderer;
+});
 const getSPARenderer = lazyCachedFunction(async () => {
   const manifest = await getClientManifest();
   const options = {
@@ -492,12 +518,12 @@ const renderer = defineRenderHandler(async (event) => {
     req: event.req,
     res: event.res,
     runtimeConfig: useRuntimeConfig(),
-    noSSR: !!true  ,
+    noSSR: !!event.req.headers["x-nuxt-no-ssr"] || (false),
     error: !!ssrError,
     nuxt: void 0,
     payload: ssrError ? { error: ssrError } : {}
   };
-  const renderer = await getSPARenderer() ;
+  const renderer = ssrContext.noSSR ? await getSPARenderer() : await getSSRRenderer();
   const _rendered = await renderer.renderToString(ssrContext).catch((err) => {
     if (!ssrError) {
       throw ssrContext.payload?.error || err;
